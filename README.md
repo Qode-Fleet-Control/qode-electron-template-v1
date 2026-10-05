@@ -1,130 +1,57 @@
-# fleet-template-v1
+# Electron template
 
-## What This Template Is
+Provisioned from [`Qode-Fleet-Control/fleet-template-v1`](https://github.com/Qode-Fleet-Control/fleet-template-v1) — the fleet
+lifecycle contract (`bin/`, `fleet.conf`, deploy workflows, `compose.yaml`) with an Electron desktop app from Electron Forge's base template, with a headless smoke test that the container runs as a job laid on top.
 
-`fleet-template-v1` is a **language-agnostic app lifecycle harness** for apps
-managed by the fleet platform. It gives any app — Node, Python, Go, a Docker
-Compose stack, anything — a uniform way to be deployed and controlled, without
-the fleet needing to know a single thing about your stack.
+**This repo is a job, not a service.** It serves no HTTP: `START_CMD` and `DOCKER_START_CMD` are
+empty, nothing is published on `$PORT`, and `bin/run` builds and stops there. The image's default
+command runs the job and exits 0 on success.
 
-The fleet injects runtime variables into the environment (`PORT`, `BASE_PATH`,
-`DATABASE_URL`) and calls `./bin/run` to deploy. Everything project-specific —
-how to install, build, and start your app — lives in **one file: `fleet.conf`**.
-That is the only file you edit per project.
+## Origin
 
-## Repository Structure
+    ELECTRON_SKIP_BINARY_DOWNLOAD=1 npx -p node@22 -p create-electron-app@8.0.1 -- create-electron-app init qode-electron-template-v1 --skip-git --package-manager npm
 
-```
-fleet.conf        ← the only file you edit per project
-.env              ← local-only env vars (gitignored)
-bin/
-  _common.sh      ← shared logic; never edit this
-  run             ← install + build + start (called by the fleet)
-  start           ← start only (no rebuild)
-  restart         ← stop + full run
-  reload          ← hot-reload config without rebuild
-  stop            ← stop the running process
-```
+Generated 2026-10-05 with create-electron-app 8.0.1 (Electron 44.5.1); run under node 22.23 fetched by `npx -p node@22`, because Forge 8 needs node >= 22.13 and the host has 22.12 (host Node v22.12.0 / npm 10.9.0).
 
-## The One File You Edit: `fleet.conf`
+## Run it
 
-`fleet.conf` is sourced as shell by the lifecycle scripts. Fill in the commands
-for your stack; leave any command empty (`''`) to skip that step.
+### On the fleet
 
-```sh
-NAME="my-app"           # label shown in fleet logs
-PORT="3000"             # default port (fleet overrides via $PORT env var)
-HEALTH_PATH="/"         # HTTP path that returns 200 when the app is ready
+The fleet clones the repo, injects `PORT` (and the workspace's `DATABASE_URL`, `REDIS_URL`, ...) and runs
+`bin/run`, which uses the docker runtime from `fleet.conf`: `docker compose build`, then nothing (a job has no start step).
 
-INSTALL_CMD='npm ci'
-BUILD_CMD='npm run build'
-START_CMD='node dist/server.js'   # must listen on $PORT; run in foreground
-RELOAD_CMD=''           # optional; empty → falls back to stop+start
-```
+### With docker
 
-> **Critical rule:** single-quote any command that uses `$PORT` or
-> `$BASE_PATH`. Single quotes defer variable expansion to **runtime** — when the
-> command actually runs, with the fleet-injected value — rather than at the
-> moment `fleet.conf` is sourced (when those values aren't set yet). Use
-> `START_CMD='gunicorn app:app --bind 0.0.0.0:$PORT'`, never double quotes.
+    docker compose build
+    docker compose run --rm app     # runs the job; exit code = result
 
-## How the Lifecycle Works
+### Without docker
 
-| Script | What it does | When to use |
-| --- | --- | --- |
-| `bin/run` | `INSTALL_CMD` → `BUILD_CMD` → `START_CMD` | Fleet deploy, fresh start |
-| `bin/start` | `START_CMD` only | Restart without rebuild |
-| `bin/restart` | stop + `bin/run` | After a code/dep change |
-| `bin/reload` | `RELOAD_CMD`, or stop+start if empty | After a config-only change |
-| `bin/stop` | Kill by pidfile or port | Tear down |
+`FLEET_RUNTIME=process bin/run` runs the plain commands from `fleet.conf`:
 
-> The process PID is written to `.fleet/app.pid` so subsequent `stop`/`restart`
-> calls can find and terminate it reliably. If the pidfile is missing or stale,
-> `stop` falls back to freeing whatever is listening on `$PORT`.
+| step | command |
+|---|---|
+| install | `npm install` |
+| build | `(none)` |
+| start | `(none — not a service)` |
 
-## How to Apply This to Your Project
+Run the job without docker: `npm install && xvfb-run -a npm test` (needs Electron's GTK/NSS/X11 libraries; plain `npm test` on a desktop). `npm start` opens the app.
 
-### Step 1 — Copy the template into your repo
+    ./bin/run       # install, build, start in the foreground
+    ./bin/start     # start from existing build artifacts
+    ./bin/restart   # rebuild and restart
+    ./bin/stop      # stop whatever holds the port
 
-```sh
-cp -r fleet-template-v1/* my-project/
-```
+See `docs/fleet-lifecycle.md` for the full contract.
 
-Or, if starting fresh, just clone it and work from `main`.
+## Deviations from the generator output
 
-### Step 2 — Edit `fleet.conf` (the only required change)
+- Added a headless smoke test: `test/smoke.test.js` (`npm test` -> `node --test test/`) launches the real Electron binary with `QODE_SMOKE_TEST=1`; in that mode `src/index.js` waits for the window's `did-finish-load`, prints `SMOKE_OK title=... h1=...` and exits 0 (exit 1 on load failure or a 30 s timeout), and skips opening DevTools. Everything else in `src/` is stock.
+- `package.json`: `author` / `description` replaced (the generator copies the local git identity into `author`), and the `test` script added.
+- The image runs the test under `xvfb-run` on `node:22-bookworm-slim` with the GTK/NSS/X11 libraries Electron needs, with `ELECTRON_NO_SANDBOX=1` (the test adds `--no-sandbox`: a container has no setuid `chrome-sandbox` or user namespaces for Chromium's sandbox). Packaging (`npm run make`) is not run in the image.
+- `node_modules/` from the generator's own `npm install` removed; its `package-lock.json` kept.
+- Added the fleet files: `bin/` (lifecycle scripts), `fleet.conf`, `Dockerfile`, `compose.yaml`, `.dockerignore`, `.env.example`, `.github/workflows/`, `docs/fleet-lifecycle.md`; fleet entries (`.fleet/`, `*.log`, ...) prepended to `.gitignore`.
 
-Fill in your stack's commands. Per-stack examples:
+## Verified
 
-```sh
-# Node.js
-INSTALL_CMD='npm ci'
-BUILD_CMD='npm run build'
-START_CMD='node dist/index.js'
-
-# Python (Gunicorn)
-INSTALL_CMD='pip install -r requirements.txt'
-BUILD_CMD=''
-START_CMD='gunicorn app:app --bind 0.0.0.0:$PORT'
-
-# Go
-INSTALL_CMD=''
-BUILD_CMD='go build -o ./out/server ./cmd/server'
-START_CMD='./out/server'
-
-# Docker Compose
-INSTALL_CMD=''
-BUILD_CMD='docker compose build'
-START_CMD='docker compose up'
-RELOAD_CMD='docker compose up -d --no-build'
-```
-
-### Step 3 — Set local env vars in `.env` (gitignored)
-
-```sh
-APP_NAME=My App
-DATABASE_URL=postgres://localhost/mydb
-```
-
-### Step 4 — Verify standalone
-
-```sh
-PORT=3001 bin/run      # should install, build, and serve on 3001
-curl http://localhost:3001/   # should 200
-```
-
-### Step 5 — Connect to the fleet
-
-Point the fleet at your repo. It will clone it, inject `PORT` / `BASE_PATH` /
-`DATABASE_URL`, and call `bin/run`. As long as your `START_CMD` listens on
-`$PORT` and `HEALTH_PATH` returns 200, the fleet will mark the app healthy.
-
-## Key Invariants
-
-- **`START_CMD` must run in the foreground and listen on `$PORT`.** Do not use a
-  dev server — HMR / hot-reload chunks 404 behind the ingress and will break the
-  app.
-- **Never put secrets in `fleet.conf`** — it's committed. Use `.env` locally;
-  the fleet injects secrets via the environment.
-- **`bin/_common.sh` is shared infrastructure** — don't edit it per project. All
-  project-specific configuration belongs in `fleet.conf`.
+**Not yet verified in docker.** On 2026-10-05 the shared docker host's disk stayed at 0-2 GB free for over 3 hours (held by other workloads), so the image was never built; `verify.sh` / `docker compose run` must still be run before this is trusted.
