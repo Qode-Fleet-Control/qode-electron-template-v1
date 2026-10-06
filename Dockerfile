@@ -24,6 +24,8 @@ RUN apt-get update \
       libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libcups2 libsecret-1-0 \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+# WORKDIR is created by root; the node user installs into it.
+RUN chown node:node /app
 COPY --chown=node:node package.json package-lock.json ./
 USER node
 # npm ci also runs electron's postinstall, which downloads the Electron binary.
