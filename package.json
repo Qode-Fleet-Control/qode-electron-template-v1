@@ -16,7 +16,7 @@
     "make": "electron-forge make",
     "release": "electron-forge release",
     "lint": "echo \"No linting configured\"",
-    "test": "node --test test/"
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1"
