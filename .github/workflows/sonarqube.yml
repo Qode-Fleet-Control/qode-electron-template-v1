@@ -1,0 +1,53 @@
+name: sonarqube
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          # electron-forge's own deps (listr2, @electron-forge/*) require Node >=22.13;
+          # the template's default '20' fails npm ci with EBADENGINE here.
+          node-version: '22'
+      - name: Install system deps for headless Electron
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libgtk-3-0 libnss3 libgbm1 libxss1 libxtst6 \
+            libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+            libxrandr2 libcups2 libsecret-1-0
+          # Ubuntu 24.04 (noble) renamed libasound2 -> libasound2t64; try the new
+          # name first and fall back for older runner images.
+          sudo apt-get install -y --no-install-recommends libasound2t64 \
+            || sudo apt-get install -y --no-install-recommends libasound2
+      - name: Install dependencies
+        run: npm ci
+      - name: Fetch Electron binary
+        # Electron 44 has no postinstall download step; fetch it explicitly (same as
+        # the Dockerfile) before the test tries to spawn it.
+        run: node node_modules/electron/install.js
+      - name: Run tests with coverage
+        env:
+          ELECTRON_NO_SANDBOX: '1'
+          ELECTRON_DISABLE_SECURITY_WARNINGS: '1'
+          CI: '1'
+        run: |
+          mkdir -p coverage
+          xvfb-run -a --server-args="-screen 0 1280x800x24" \
+            node --test --experimental-test-coverage --test-reporter=lcov \
+            --test-reporter-destination=coverage/lcov.info "test/**/*.test.js"
+      - uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      - uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
